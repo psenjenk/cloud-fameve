@@ -6,28 +6,128 @@ services:
     image: mysql:5.7
     # image: mysql:5.7 indicates the MySQL database container image from Docker Hub used in this installation.
     restart: always
+    env_file: .env
+    volumes:
+      - mysql:/var/lib/mysql
+      - ./backup:/backup
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     environment:
-      MYSQL_ROOT_PASSWORD: MyR00tMySQLPa$$5w0rD
-      MYSQL_DATABASE: MyWordPressDatabaseName
-      MYSQL_USER: MyWordPressUser
-      MYSQL_PASSWORD: Pa$$5w0rD
-      # Previous four lines define the main variables needed for the MySQL container to work: database, database username, database user password, and the MySQL root password.
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    command: --max_allowed_packet=128M --innodb_buffer_pool_size=1G
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=3306"
   wordpress:
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     image: wordpress:latest
     restart: always
     # Restart line controls the restart mode, meaning if the container stops running for any reason, it will restart the process immediately.
     ports:
-      - "8000:80"
+      - "${WORDPRESS_PORT}:80"
       # The previous line defines the port that the WordPress container will use. After successful installation, the full path will look like this: http://localhost:8000
+    env_file: .env
     environment:
-      WORDPRESS_DB_HOST: db:3306
-      WORDPRESS_DB_USER: MyWordPressUser
-      WORDPRESS_DB_PASSWORD: Pa$$5w0rD
-      WORDPRESS_DB_NAME: MyWordPressDatabaseName
+      - WORDPRESS_DB_HOST=${WORDPRESS_DB_HOST}
+      - WORDPRESS_DB_USER=${WORDPRESS_DB_USER}
+      - WORDPRESS_DB_PASSWORD=${WORDPRESS_DB_PASSWORD}
+      - WORDPRESS_DB_NAME=${WORDPRESS_DB_NAME}
+      - WORDPRESS_CONFIG_EXTRA=
+        define('WP_MEMORY_LIMIT', '256M');
+        define('WP_MAX_MEMORY_LIMIT', '512M');
+        define('WP_CACHE', true);
 # Similar to MySQL image variables, the last four lines define the main variables needed for the WordPress container to work properly with the MySQL container.
     volumes:
-      ["./:/var/www/html"]
+      - ./app:/var/www/html
+      - wordpress_data:/var/www/html/wp-content
+      - ./backup:/backup
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=80"
+
+  backup:
+    image: duplicity/duplicity:latest
+    volumes:
+      - ./backup:/backup
+      - wordpress_data:/source:ro
+    environment:
+      - PASSPHRASE=${BACKUP_PASSPHRASE}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    command: >
+      /bin/sh -c '
+      duplicity --full-if-older-than 7D /source s3://${AWS_BUCKET}/wordpress-backup &&
+      duplicity cleanup --force s3://${AWS_BUCKET}/wordpress-backup &&
+      duplicity collection-status s3://${AWS_BUCKET}/wordpress-backup
+      '
+    depends_on:
+      - wordpress
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - wordpress
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=80"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=3000"
+
 volumes:
-  mysql: {}
+  mysql:
+    driver: local
+  wordpress_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

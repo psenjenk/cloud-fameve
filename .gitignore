@@ -1,0 +1,43 @@
+# Environment variables
+.env
+
+# WordPress files
+app/wp-config.php
+app/wp-content/uploads/
+app/wp-content/cache/
+app/wp-content/backup-db/
+app/wp-content/backups/
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# SSL certificates
+ssl/*.pem
+ssl/*.key
+ssl/*.crt
+
+# IDE files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*.sql
+*.tar.gz
+
+# Temporary files
+*.tmp
+*.temp
+*.swp 
